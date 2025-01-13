@@ -5,6 +5,7 @@ import jwt from 'jsonwebtoken'
 import { v2 as cloudinary } from 'cloudinary'
 import doctorModel from '../models/doctormodel.js'
 import appoinmentMOdel from '../models/appoinmentModel.js'
+import razorpay from 'razorpay'
 
 const registerUser = async (req,res)=>{
 
@@ -194,4 +195,142 @@ const loginUser = async(req,res)=>{
 
      }
   }
-export {registerUser,loginUser,getProfile,updateProfile,bookAppointment}
+
+
+
+  const lisAppoinments = async(req,res) =>{
+
+          try{
+
+            const {userId} = req.body
+            const appoinments = await appoinmentMOdel.find({userId})
+                
+            res.json({success:true,appoinments})
+          }catch(erorr){
+            console.log(erorr)
+            res.json({success:false,message:error.message})
+    
+
+          }
+
+  }
+
+  const cancellAppoinment = async(req, res) => {
+    try {
+        const { userId, appoinmentId } = req.body;
+        console.log(appoinmentId)
+
+        // Find the appointment by ID
+        const appoinmentData = await appoinmentMOdel.findById(appoinmentId);
+
+        // Check if appointment data exists
+        if (!appoinmentData) {
+            return res.json({ success: false, message: 'Appointment not found!' });
+        }
+
+        // Check if the logged-in user is the one who booked the appointment
+        if (appoinmentData.userId.toString() !== userId) {
+            console.log('User ID:', userId);
+            console.log('Appointment User ID:', appoinmentData.userId);
+            return res.json({ success: false, message: 'Unauthorized login!' });
+        }
+
+        // Mark the appointment as cancelled
+        await appoinmentMOdel.findByIdAndUpdate(appoinmentId, { cancelled: true });
+
+        const { docId, slotDate, slotTime } = appoinmentData;
+
+        // Find the doctor data by ID
+        const doctorData = await doctorModel.findById(docId);
+
+        // Check if the doctor exists
+        if (!doctorData) {
+            return res.json({ success: false, message: 'Doctor not found!' });
+        }
+
+        // Update the doctor's slots_booked field
+        let slots_booked = doctorData.slots_booked;
+
+        // Remove the cancelled slot from the doctor's schedule
+        if (slots_booked[slotDate]) {
+            slots_booked[slotDate] = slots_booked[slotDate].filter(e => e !== slotTime);
+            await doctorModel.findByIdAndUpdate(docId, { slots_booked });
+        } else {
+            return res.json({ success: false, message: 'No slots found for the given date!' });
+        }
+
+        // Send success response
+        res.json({ success: true, message: 'Appointment cancelled successfully!' });
+
+    } catch (error) {
+        console.log(error);
+        res.json({ success: false, message: error.message });
+    }
+};
+
+
+const razorpayInstanc= new razorpay({
+
+    key_id:process.env.RAZORPAY_KEY_ID,
+    key_secret:process.env.RAZORPAY_KEY_SECRET
+})
+
+
+
+const paymentRazorpay = async (req,res)=>{
+
+    try{
+
+    const {appoinmentId}  = req.body
+
+    const appoinmentData = await appoinmentMOdel.findById(appoinmentId)
+
+    if(!appoinmentData || appoinmentData.cancelled){
+        return res.json({success:false,message:"Appoinment Cancelled or not found"})
+    }
+
+    const options ={
+
+        amount:appoinmentData.amount*100,
+        currency:'INR',
+        receipt:appoinmentId,
+
+    }
+
+    const order = await razorpayInstanc.orders.create(options)
+
+    res.json({success:true,order})
+} catch(erorr){
+    console.log(erorr);
+    res.json({ success: false, message: erorr.message });
+}
+}
+
+
+const verifyPayment = async(req,res)=>{
+
+    try{
+
+         
+        const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
+
+           const orderInfo = await razorpayInstanc.orders.fetch(razorpay_order_id)
+
+           console.log(orderInfo)
+           if(orderInfo.status==='paid'){
+             
+            await appoinmentMOdel.findByIdAndUpdate(orderInfo.receipt,{payment:true})
+            res.json({success:true,message:"PAyemt Successful"})
+           }else{
+
+            console.log(erorr);
+            res.json({success:false,message:"payment Fail"})
+           }
+            
+    } catch(erorr){
+    console.log(erorr);
+    res.json({ success: false, message: erorr.message });
+}
+}
+
+export {registerUser,loginUser,getProfile,verifyPayment,paymentRazorpay,lisAppoinments,updateProfile,bookAppointment,cancellAppoinment}
